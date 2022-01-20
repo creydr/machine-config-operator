@@ -312,6 +312,8 @@ func renderTemplate(config RenderConfig, path string, b []byte) ([]byte, error) 
 	funcs["onPremPlatformKeepalivedEnableUnicast"] = onPremPlatformKeepalivedEnableUnicast
 	funcs["urlHost"] = urlHost
 	funcs["urlPort"] = urlPort
+	funcs["clusterName"] = clusterName
+	funcs["clusterBaseDomain"] = clusterBaseDomain
 	tmpl, err := template.New(path).Funcs(funcs).Parse(string(b))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse template %s: %v", path, err)
@@ -546,4 +548,66 @@ func urlPort(u string) (interface{}, error) {
 	default:
 		return "", fmt.Errorf("unknown scheme in %s", u)
 	}
+}
+
+func clusterName(cfg RenderConfig) (interface{}, error) {
+	serverURL, err := url.Parse(cfg.Infra.Status.APIServerURL)
+	if err != nil {
+		return nil, err
+	}
+
+	return clusterNameFromInfrastructureNameAndApiHostname(cfg.Infra.Status.InfrastructureName, serverURL.Hostname())
+}
+
+func clusterBaseDomain(cfg RenderConfig) (interface{}, error) {
+	return cfg.DNS.Spec.BaseDomain, nil
+}
+
+// clusterNameFromInfrastructureNameAndApiHostname returns the most plausible
+// cluster name based on the information of the infrastructureName and
+// apiHostname. It checks it by cutting off parts at the end of the
+// infrastructureName and checking if it is contained in the api servers host
+// name.
+//
+// e.g. infrastructureName: "sub-my-cluster-nzml9" and api server host
+// name: "api.sub.my-cluster.ocp.redhat.com" --> removes the "-nzml9" from
+// the end of the instrastructure name.
+func clusterNameFromInfrastructureNameAndApiHostname(infrastructureName, apiHostname string) (string, error) {
+	parts := strings.Split(infrastructureName, "-")
+	for i := len(parts) - 1; i > 0; i-- {
+		infraNameShortend := strings.Join(parts[:i], "-")
+
+		possibleClusternames := clusterNameCombinations(infraNameShortend)
+		for _, possibleClustername := range possibleClusternames {
+			if !strings.HasSuffix(possibleClustername, ".") && strings.Contains(apiHostname, possibleClustername) {
+				return possibleClustername, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("could find a matching of %s in %s", infrastructureName, apiHostname)
+}
+
+// clusterNameCombinations returns a list of strings with all combinations with
+// a dash replaced by a dot in the given string.
+//
+// given nameRaw with "a-b-c" it will return a slice containing a-b-c, a.b-c,
+// a-b.c and a.b.c
+func clusterNameCombinations(nameRaw string) []string {
+	parts := strings.SplitN(nameRaw, "-", 2)
+	if len(parts) == 2 {
+		suffixes := clusterNameCombinations(strings.Join(parts[1:], "-"))
+
+		var possibleNames []string
+		for _, suffix := range suffixes {
+			possibleNames = append(possibleNames, fmt.Sprintf("%s.%s", parts[0], suffix))
+			possibleNames = append(possibleNames, fmt.Sprintf("%s-%s", parts[0], suffix))
+		}
+
+		return possibleNames
+	} else if len(parts) == 1 {
+		return parts
+	}
+
+	return nil
 }

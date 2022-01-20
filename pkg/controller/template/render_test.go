@@ -12,10 +12,9 @@ import (
 	ign3types "github.com/coreos/ignition/v2/config/v3_2/types"
 	configv1 "github.com/openshift/api/config/v1"
 	"github.com/openshift/library-go/pkg/cloudprovider"
-	"k8s.io/client-go/kubernetes/scheme"
-
 	mcfgv1 "github.com/openshift/machine-config-operator/pkg/apis/machineconfiguration.openshift.io/v1"
 	ctrlcommon "github.com/openshift/machine-config-operator/pkg/controller/common"
+	"k8s.io/client-go/kubernetes/scheme"
 )
 
 func TestMain(m *testing.M) {
@@ -496,5 +495,105 @@ func verifyIgn(actual [][]byte, dir string, t *testing.T) {
 
 	for key := range expected {
 		t.Errorf("can't find expected file:\n%v", key)
+	}
+}
+
+func Test_clusterNameFromInfrastructureName(t *testing.T) {
+	tests := []struct {
+		name               string
+		infrastructureName string
+		apiHostname        string
+		want               string
+		wantErr            bool
+	}{
+		{
+			name:               "Should return cluster name",
+			infrastructureName: "my-cluster-nzml9",
+			apiHostname:        "api.my-cluster.ocp.redhat.com",
+			want:               "my-cluster",
+			wantErr:            false,
+		},
+		{
+			name:               "Should be able to handle dots ('.') in cluster name",
+			infrastructureName: "sub-sub-my-clustername-foobar",
+			apiHostname:        "api-int.sub.sub.my-clustername.ocp.redhat.com",
+			want:               "sub.sub.my-clustername",
+			wantErr:            false,
+		},
+		{
+			name:               "Should be able to handle a mix of dots ('.') and dashes ('-') in cluster name",
+			infrastructureName: "sub-sub-sub-my-clustername-foobar",
+			apiHostname:        "api-int.sub-sub.sub.my-clustername.ocp.redhat.com",
+			want:               "sub-sub.sub.my-clustername",
+			wantErr:            false,
+		},
+		{
+			name:               "Should return error if clustername could not be found",
+			infrastructureName: "foo-bar",
+			apiHostname:        "api-int.ocp.redhat.com",
+			want:               "",
+			wantErr:            true,
+		},
+		{
+			name:               "Should return error if infrastructureName is empty",
+			infrastructureName: "",
+			apiHostname:        "api-int.ocp.redhat.com",
+			want:               "",
+			wantErr:            true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := clusterNameFromInfrastructureNameAndApiHostname(tt.infrastructureName, tt.apiHostname)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("clusterNameFromInfrastructureName(%s, %s) = \"%s\" error = \"%v\", wantErr \"%v\"", tt.infrastructureName, tt.apiHostname, got, err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("clusterNameFromInfrastructureName(%s, %s) = \"%v\", want \"%v\"", tt.infrastructureName, tt.apiHostname, got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_clusterNameCombinations(t *testing.T) {
+	tests := []struct {
+		name           string
+		clusterNameRaw string
+		want           []string
+	}{
+		{
+			name:           "a",
+			clusterNameRaw: "a-b-c-d",
+			want: []string{
+				"a-b-c-d",
+				"a.b-c-d",
+				"a-b.c-d",
+				"a.b.c-d",
+				"a-b-c.d",
+				"a.b-c.d",
+				"a-b.c.d",
+				"a.b.c.d",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := clusterNameCombinations(tt.clusterNameRaw)
+			if len(got) != len(tt.want) {
+				t.Errorf("len of clusterNameCombinations(%s) = %d, want %d", tt.clusterNameRaw, len(got), len(tt.want))
+			}
+			for _, wantElement := range tt.want {
+				found := false
+				for _, gotElement := range got {
+					if gotElement == wantElement {
+						found = true
+					}
+				}
+				if !found {
+					t.Errorf("didn't find %s in clusterNameCombinations(%s) = %v", wantElement, tt.clusterNameRaw, got)
+				}
+			}
+		})
 	}
 }
